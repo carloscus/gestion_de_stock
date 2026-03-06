@@ -282,6 +282,28 @@ def generate_especiales_report(df_consolidado: pd.DataFrame):
 def generate_productos_local_json(df_consolidado: pd.DataFrame, lineas_a_procesar: List[str]):
     """Genera el archivo JSON para la webapp (IndexedDB)."""
     try:
+        # Cargar códigos generales con su orden usando configuración centralizada
+        try:
+            df_codigos_generales = pd.read_excel(settings.INPUT_GENERALES_EXCEL, dtype={'codigo': str})
+            df_codigos_generales['codigo'] = df_codigos_generales['codigo'].str.strip()
+            
+            # Validar que exista la columna 'orden'
+            if 'orden' not in df_codigos_generales.columns:
+                logging.warning("El Excel de códigos generales no tiene columna 'orden'. Usando orden por código.")
+                codigos_orden = None
+                max_orden_excel = 0
+            else:
+                codigos_orden = dict(zip(df_codigos_generales['codigo'].astype(str), df_codigos_generales['orden'].astype(int)))
+                max_orden_excel = int(df_codigos_generales['orden'].max())
+        except FileNotFoundError:
+            logging.warning(f"No se encontró {settings.INPUT_GENERALES_EXCEL}. Usando orden por código.")
+            codigos_orden = None
+            max_orden_excel = 0
+        except Exception as e:
+            logging.warning(f"Error al leer códigos_generales.xlsx: {e}. Usando orden por código.")
+            codigos_orden = None
+            max_orden_excel = 0
+        
         df_productos_local = df_consolidado[df_consolidado['linea'].isin(lineas_a_procesar)].copy()
         if df_productos_local.empty:
             logging.warning("No hay productos para productos_local.json")
@@ -295,7 +317,27 @@ def generate_productos_local_json(df_consolidado: pd.DataFrame, lineas_a_procesa
             return ' '.join(sorted(parts))
         df_productos_local['keywords'] = df_productos_local.apply(generate_keywords, axis=1)
 
-        output_cols = ['codigo', 'nombre', 'u_por_caja', 'stock_referencial', 'linea', 'keywords', 'precio', 'can_kg_um']
+        # Agregar campo orden
+        df_productos_local['codigo_str'] = df_productos_local['codigo'].astype(str).str.strip()
+        
+        if codigos_orden is not None:
+            df_productos_local['orden'] = df_productos_local['codigo_str'].apply(
+                lambda x: codigos_orden.get(x, None)
+            )
+            
+            # Asignar orden secuencial a los que no están en el Excel
+            orden_actual = max_orden_excel + 1
+            for idx in df_productos_local[df_productos_local['orden'].isna()].index:
+                df_productos_local.loc[idx, 'orden'] = orden_actual
+                orden_actual += 1
+        else:
+            # Fallback: ordenar por código si no hay columna 'orden'
+            df_productos_local['orden'] = range(1, len(df_productos_local) + 1)
+        
+        df_productos_local['orden'] = df_productos_local['orden'].astype(int)
+        df_productos_local = df_productos_local.sort_values('orden')
+        
+        output_cols = ['codigo', 'nombre', 'u_por_caja', 'stock_referencial', 'linea', 'keywords', 'precio', 'can_kg_um', 'orden']
         if 'ean' in df_productos_local.columns: output_cols.insert(2, 'ean')
         if 'ean_14' in df_productos_local.columns: output_cols.insert(3, 'ean_14')
         
